@@ -15,6 +15,7 @@ func main() {
 	ex5()
 	ex6and7()
 	ex8()
+	implement()
 }
 
 func task(i int, name string) {
