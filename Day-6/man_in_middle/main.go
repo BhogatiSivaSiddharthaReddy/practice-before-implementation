@@ -9,96 +9,95 @@ import (
 	"syscall"
 )
 
-func gatewayHandler(res http.ResponseWriter, req *http.Request) {
-	fmt.Println("Request reached gateway")
+func main() {
+	// creating gateway servemux, handler and http server
 
-	// Create new request to backend
-	backendReq, err := http.NewRequest(
-		req.Method,
-		"http://localhost:8081",
-		req.Body,
-	)
-	if err != nil {
-		http.Error(res, "Failed to create backend request", http.StatusInternalServerError)
-		return
+	gateway := http.NewServeMux()
+
+	gateway.HandleFunc("/", gatewayhandler)
+
+	gatewayserver := &http.Server{
+		Addr:    ":8080",
+		Handler: gateway,
 	}
 
-	// Copy headers from original request
-	for key, values := range req.Header {
-		for _, value := range values {
-			backendReq.Header.Add(key, value)
+	go func() {
+		fmt.Println("gateway started on port 8080")
+		if err := gatewayserver.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Println("Gateway Error", err)
 		}
+	}()
+
+	// creating backend servemux, handler, and http server
+	backend := http.NewServeMux()
+
+	backend.HandleFunc("/", backendhandler)
+
+	backendserver := &http.Server{
+		Addr:    ":9090",
+		Handler: backend,
 	}
 
-	// Add X-Forwarded-For header
-	backendReq.Header.Add("X-Forwarded-For", req.RemoteAddr)
-
-	client := &http.Client{}
-
-	resp, err := client.Do(backendReq)
-	if err != nil {
-		http.Error(res, "Failed to reach backend", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	// Copy backend headers to response
-	for key, values := range resp.Header {
-		for _, value := range values {
-			res.Header().Add(key, value)
+	go func() {
+		fmt.Println("backend started on port 9090")
+		if err := backendserver.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Println("backend Error", err)
 		}
-	}
+	}()
 
-	// Set status code
-	res.WriteHeader(resp.StatusCode)
+	ch := make(chan os.Signal, 1)
 
-	// Copy body
-	io.Copy(res, resp.Body)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+
+	<-ch
+
+	fmt.Println("shutting down gateway and backend")
+
 }
 
-func backendHandler(res http.ResponseWriter, req *http.Request) {
-	fmt.Println("Request reached backend")
+func gatewayhandler(res http.ResponseWriter, req *http.Request) {
+	fmt.Println("request reached gateway")
+
+	NewRequest, err := http.NewRequest(req.Method, "http://localhost:9090", req.Body)
+
+	if err != nil {
+		fmt.Println("Failed to make Backend request")
+		http.Error(res, "failed to make connection to backend", http.StatusInternalServerError)
+		return
+	}
+
+	for head, values := range req.Header {
+		for _, value := range values {
+			NewRequest.Header.Add(head, value)
+		}
+	}
+
+	NewRequest.Header.Add("X-Forwarded-For", req.RemoteAddr)
+	client := &http.Client{}
+
+	newres, err := client.Do(NewRequest)
+
+	if err != nil {
+		http.Error(res, "Fialed to make connection", http.StatusBadGateway)
+		return
+	}
+	newres.Body.Close()
+
+	for head, values := range newres.Header {
+		for _, value := range values {
+			res.Header().Add(head, value)
+		}
+	}
+
+	// Set status code res.WriteHeader(resp.StatusCode) // Copy body io.Copy(res, resp.Body)
+	res.WriteHeader(newres.StatusCode)
+
+	io.Copy(res, newres.Body)
+}
+
+func backendhandler(res http.ResponseWriter, req *http.Request) {
+	fmt.Println("Backend recieved request")
 	clientIP := req.Header.Get("X-Forwarded-For")
 	fmt.Println("X-Forwarded-For:", clientIP)
 	fmt.Fprintln(res, "Backend response received")
-}
-
-func main() {
-	// Backend server
-	backendMux := http.NewServeMux()
-	backendMux.HandleFunc("/", backendHandler)
-
-	backend := &http.Server{
-		Addr:    ":8081",
-		Handler: backendMux,
-	}
-
-	go func() {
-		fmt.Println("Backend running on :8081")
-		if err := backend.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Println("Backend error:", err)
-		}
-	}()
-
-	// Gateway server
-	gatewayMux := http.NewServeMux()
-	gatewayMux.HandleFunc("/", gatewayHandler)
-
-	gateway := &http.Server{
-		Addr:    ":8080",
-		Handler: gatewayMux,
-	}
-
-	go func() {
-		fmt.Println("Gateway running on :8080")
-		if err := gateway.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Println("Gateway error:", err)
-		}
-	}()
-
-	// Graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	fmt.Println("Shutting down servers...")
 }
