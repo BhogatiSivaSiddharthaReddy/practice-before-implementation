@@ -99,5 +99,12 @@ func backendhandler(res http.ResponseWriter, req *http.Request) {
 	fmt.Println("Backend recieved request")
 	clientIP := req.Header.Get("X-Forwarded-For")
 	fmt.Println("X-Forwarded-For:", clientIP)
+	res.Header().Add(
+		"X-Backend-Service",
+		"users-api",
+	)
+
+	res.WriteHeader(http.StatusCreated)
+
 	fmt.Fprintln(res, "Backend response received")
 }
